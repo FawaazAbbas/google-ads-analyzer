@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 from datetime import datetime
 
+import tempfile
+
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -13,6 +15,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from agent.runner import run_analysis, EXPECTED_FILES, FILE_LABELS
+from tools.utils import classify_csv, TYPE_TO_FILENAME, TYPE_LABELS
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -79,14 +82,50 @@ for key, val in defaults.items():
 # Helpers
 # ---------------------------------------------------------------------------
 
+def classify_uploaded_file(uf):
+    """
+    Classify an UploadedFile by writing it to a temp file and inspecting its headers.
+    Returns a type key string (e.g. "campaigns") or None.
+    """
+    # Fast path: if the filename exactly matches a known canonical name, trust it
+    canonical_names = set(EXPECTED_FILES)
+    if uf.name in canonical_names:
+        # Reverse-lookup: filename → type key
+        for k, v in TYPE_TO_FILENAME.items():
+            if v == uf.name:
+                return k
+
+    # Content-based classification via temp file
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+            tmp.write(uf.getvalue())
+            tmp_path = tmp.name
+        detected = classify_csv(tmp_path)
+    except Exception:
+        detected = None
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+    return detected
+
+
 def save_uploaded_files(uploaded_files):
-    """Write recognised uploaded files to the data/ directory. Returns saved filenames."""
+    """
+    Classify each uploaded CSV by content, save to canonical filename in data/.
+    Returns the list of canonical filenames that were saved successfully.
+    """
     DATA_DIR.mkdir(exist_ok=True)
     saved = []
     for uf in uploaded_files:
-        if uf.name in EXPECTED_FILES:
-            (DATA_DIR / uf.name).write_bytes(uf.getvalue())
-            saved.append(uf.name)
+        file_type = classify_uploaded_file(uf)
+        if file_type:
+            canonical = TYPE_TO_FILENAME[file_type]
+            (DATA_DIR / canonical).write_bytes(uf.getvalue())
+            saved.append(canonical)
     return saved
 
 
@@ -169,37 +208,30 @@ uploaded_files = st.file_uploader(
     label_visibility="collapsed",
 )
 
-recognised = []
-unrecognised = []
+recognised = []   # canonical filenames that will be analysed
 
 if uploaded_files:
+    col1, col2 = st.columns(2)
+    entries = []
     for uf in uploaded_files:
-        if uf.name in EXPECTED_FILES:
-            recognised.append(uf.name)
+        detected = classify_uploaded_file(uf)
+        entries.append((uf.name, detected))
+        if detected:
+            recognised.append(TYPE_TO_FILENAME[detected])
+
+    mid = (len(entries) + 1) // 2
+    for i, (fname, detected) in enumerate(entries):
+        col = col1 if i < mid else col2
+        if detected:
+            label = TYPE_LABELS.get(detected, detected)
+            col.markdown("✅ **{}**  \n*Detected: {}*".format(fname, label))
         else:
-            unrecognised.append(uf.name)
-
-    if recognised:
-        col1, col2 = st.columns(2)
-        mid = (len(recognised) + 1) // 2
-        for i, fname in enumerate(recognised):
-            col = col1 if i < mid else col2
-            label = FILE_LABELS.get(fname, fname)
-            col.markdown("✅ **{}** — {}".format(fname, label))
-
-    if unrecognised:
-        st.warning(
-            "These files were not recognised and will be skipped: `{}`  \n"
-            "Expected names: `{}`".format(
-                "`, `".join(unrecognised),
-                "`, `".join(EXPECTED_FILES),
-            )
-        )
+            col.markdown("⚠️ **{}**  \n*Could not identify — will skip*".format(fname))
 else:
     # Show a quick cheat sheet of what to export
     with st.expander("What files should I export? (click to expand)"):
-        for fname, label in FILE_LABELS.items():
-            st.markdown("- **{}** — {}".format(fname, label))
+        for type_key, label in TYPE_LABELS.items():
+            st.markdown("- **{}** — {}".format(TYPE_TO_FILENAME[type_key], label))
 
 st.divider()
 
@@ -208,6 +240,7 @@ st.divider()
 # ---------------------------------------------------------------------------
 st.markdown('<p class="step-label">Step 3 — Run Analysis</p>', unsafe_allow_html=True)
 
+recognised = list(dict.fromkeys(recognised))  # deduplicate, preserve order
 has_files  = bool(recognised)
 has_key    = bool(get_api_key(manual_api_key))
 can_run    = has_files and has_key and not st.session_state.analysis_running

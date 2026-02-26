@@ -187,3 +187,157 @@ def find_col(df: pd.DataFrame, *candidates):
         if candidate.lower() in lower_cols:
             return lower_cols[candidate.lower()]
     return None
+
+
+# Maps classified type key → canonical filename used by the analysis tools
+TYPE_TO_FILENAME = {
+    "campaigns":    "campaigns.csv",
+    "keywords":     "keywords.csv",
+    "search_terms": "search_terms.csv",
+    "ads":          "ads.csv",
+    "ad_groups":    "ad_groups.csv",
+    "devices":      "devices.csv",
+    "audiences":    "audiences.csv",
+    "extensions":   "extensions.csv",
+    "geographic":   "geographic.csv",
+    "time_of_day":  "time_of_day.csv",
+    "day_of_week":  "day_of_week.csv",
+}
+
+# Human-readable labels for each type key
+TYPE_LABELS = {
+    "campaigns":    "Campaign Performance",
+    "keywords":     "Keywords & Quality Score",
+    "search_terms": "Search Terms",
+    "ads":          "Ad Creatives",
+    "ad_groups":    "Ad Group Structure",
+    "devices":      "Device Performance",
+    "audiences":    "Audiences",
+    "extensions":   "Ad Extensions",
+    "geographic":   "Geographic Performance",
+    "time_of_day":  "Hour of Day Performance",
+    "day_of_week":  "Day of Week Performance",
+}
+
+# Primary dimension columns that appear as the FIRST column in each report type.
+# Ordered from most specific to most generic to avoid false matches.
+_FIRST_COL_MAP = [
+    ("search term",       "search_terms"),
+    ("hour of day",       "time_of_day"),
+    ("day of week",       "day_of_week"),
+    ("country/territory", "geographic"),
+    ("asset type",        "extensions"),
+    ("audience segment",  "audiences"),
+    ("audience",          "audiences"),
+    ("device",            "devices"),
+    ("ad group",          "ad_groups"),
+    ("keyword",           "keywords"),
+    ("campaign",          "campaigns"),
+    ("city",              "geographic"),
+    ("region",            "geographic"),
+    ("location",          "geographic"),
+    ("ad",                "ads"),
+]
+
+# Weighted column signatures used when the first-column check is inconclusive.
+# Higher weights = stronger signal for that report type.
+_SIGNATURES = {
+    "campaigns": {
+        "budget": 6,
+        "search impr. share": 8,
+        "impr. share": 5,
+        "cost / conv.": 3,
+    },
+    "keywords": {
+        "quality score": 10,
+        "ad relevance": 8,
+        "landing page exp.": 8,
+        "exp. ctr": 6,
+        "match type": 3,
+    },
+    "search_terms": {
+        "search term": 12,
+        "added/excluded": 8,
+    },
+    "ads": {
+        "headline 1": 10,
+        "ad strength": 10,
+        "description 1": 8,
+        "final url": 4,
+    },
+    "ad_groups": {
+        "default max. cpc": 10,
+        "ad group": 5,
+    },
+    "devices": {
+        "device": 10,
+    },
+    "audiences": {
+        "audience": 8,
+        "bid adj.": 5,
+    },
+    "extensions": {
+        "asset type": 10,
+        "association level": 10,
+        "extension": 5,
+    },
+    "geographic": {
+        "country/territory": 12,
+        "city": 8,
+        "region": 6,
+    },
+    "time_of_day": {
+        "hour of day": 14,
+    },
+    "day_of_week": {
+        "day of week": 14,
+        "day": 5,
+    },
+}
+
+
+def classify_csv(path):
+    """
+    Inspect a CSV's column headers and return its Google Ads report type key, or None.
+
+    Strategy:
+    1. Load just enough to read headers via load_csv.
+    2. Check the first column (the primary dimension) for a high-confidence match.
+    3. Fall back to weighted signature scoring across all columns.
+
+    Returns one of: "campaigns", "keywords", "search_terms", "ads", "ad_groups",
+    "devices", "audiences", "extensions", "geographic", "time_of_day", "day_of_week",
+    or None if the file cannot be identified.
+    """
+    try:
+        df = load_csv(path)
+    except Exception:
+        return None
+
+    if df.empty or len(df.columns) < 2:
+        return None
+
+    cols_lower = [c.lower().strip() for c in df.columns]
+    first_col = cols_lower[0] if cols_lower else ""
+
+    # Step 1: match primary dimension column (first column) — high confidence
+    for fragment, type_key in _FIRST_COL_MAP:
+        if first_col == fragment or first_col.startswith(fragment + " "):
+            return type_key
+
+    # Step 2: weighted signature scoring across all columns
+    scores = {}
+    for type_key, sig in _SIGNATURES.items():
+        score = 0
+        for fragment, weight in sig.items():
+            if any(fragment in col for col in cols_lower):
+                score += weight
+        scores[type_key] = score
+
+    if not scores:
+        return None
+
+    best_type = max(scores, key=scores.get)
+    best_score = scores[best_type]
+
+    return best_type if best_score >= 5 else None
