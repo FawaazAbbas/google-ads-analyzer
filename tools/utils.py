@@ -45,16 +45,96 @@ def clean_number(val):
 
 
 def load_csv(path: str) -> pd.DataFrame:
-    """Load a Google Ads CSV export, skipping the summary footer rows."""
+    """
+    Load a Google Ads CSV export robustly.
+
+    Handles the common messiness of real Google Ads exports:
+    - Report title rows at the top (e.g. "Campaign performance report")
+    - BOM characters (utf-8-sig encoding)
+    - Non-comma delimiters (semicolons, tabs — common in non-English locales)
+    - Summary/total footer rows at the bottom
+    - Trailing empty rows
+    """
+    import csv as csv_module
+
+    # Read raw lines to inspect structure before parsing
+    encodings = ['utf-8-sig', 'utf-8', 'latin-1']
+    lines = None
+    used_encoding = 'utf-8-sig'
+    for enc in encodings:
+        try:
+            with open(path, 'r', encoding=enc) as f:
+                lines = f.read().splitlines()
+            used_encoding = enc
+            break
+        except Exception:
+            continue
+
+    if lines is None:
+        raise ValueError("Could not read file: {}".format(path))
+
+    # Find the first line that looks like a real header row:
+    # it must have at least 3 fields when split by a common delimiter.
+    header_idx = 0
+    for i, line in enumerate(lines):
+        stripped = line.strip().strip('\ufeff')
+        if not stripped:
+            continue
+        # Count fields for each candidate delimiter
+        for delim in [',', ';', '\t', '|']:
+            parts = stripped.split(delim)
+            if len(parts) >= 3:
+                header_idx = i
+                break
+        else:
+            continue
+        break
+
+    # Detect the delimiter from the header + a few data rows
+    sample_lines = [l for l in lines[header_idx:header_idx + 6] if l.strip()]
+    sample = '\n'.join(sample_lines)
+    sep = ','
     try:
-        df = pd.read_csv(path, skipfooter=2, engine='python')
-        df.columns = [c.strip() for c in df.columns]
-        return df
+        dialect = csv_module.Sniffer().sniff(sample, delimiters=',;\t|')
+        sep = dialect.delimiter
     except Exception:
-        # Try without skipfooter
-        df = pd.read_csv(path)
-        df.columns = [c.strip() for c in df.columns]
-        return df
+        # Fallback: pick the delimiter that produces the most columns in the header
+        header = lines[header_idx] if header_idx < len(lines) else ''
+        best = max([',', ';', '\t', '|'], key=lambda d: len(header.split(d)))
+        sep = best
+
+    # Load the CSV, skipping title rows and footer rows
+    try:
+        df = pd.read_csv(
+            path,
+            sep=sep,
+            skiprows=header_idx,
+            skipfooter=2,
+            engine='python',
+            encoding=used_encoding,
+            thousands=',',
+            on_bad_lines='skip',
+        )
+    except TypeError:
+        # pandas < 1.3 uses error_bad_lines instead of on_bad_lines
+        df = pd.read_csv(
+            path,
+            sep=sep,
+            skiprows=header_idx,
+            skipfooter=2,
+            engine='python',
+            encoding=used_encoding,
+            thousands=',',
+            error_bad_lines=False,
+        )
+
+    # Clean up
+    df.columns = [str(c).strip() for c in df.columns]
+    df = df.dropna(how='all')                          # drop fully-empty rows
+    df = df[~df.iloc[:, 0].astype(str).str.lower()    # drop "Total" footer rows
+              .str.startswith('total')]
+
+    return df
 
 
 def safe_divide(numerator, denominator, default=0.0):
