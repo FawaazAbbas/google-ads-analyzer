@@ -12,6 +12,7 @@ Event types:
     ("error",      str)   - fatal error message
 """
 import os
+import time
 from datetime import datetime
 
 import anthropic
@@ -119,22 +120,38 @@ def run_analysis(available_files, api_key, data_dir="data"):
     while True:
         yield ("thinking", None)
 
-        try:
-            response = client.messages.create(
-                model="claude-opus-4-6",
-                max_tokens=8096,
-                system=system,
-                tools=TOOLS,
-                messages=messages,
-            )
-        except anthropic.AuthenticationError:
-            yield ("error", "Invalid API key. Please check your Anthropic API key and try again.")
-            return
-        except anthropic.RateLimitError:
-            yield ("error", "Rate limit reached. Please wait a moment and try again.")
-            return
-        except Exception as e:
-            yield ("error", "API call failed: {}".format(str(e)))
+        # Retry loop — preserves all progress made so far if a rate limit is hit
+        response = None
+        max_retries = 3
+        retry_wait = 65  # seconds (slightly over 60 so the per-minute window resets)
+        for attempt in range(max_retries + 1):
+            try:
+                response = client.messages.create(
+                    model="claude-opus-4-6",
+                    max_tokens=8096,
+                    system=system,
+                    tools=TOOLS,
+                    messages=messages,
+                )
+                break  # success — exit retry loop
+            except anthropic.AuthenticationError:
+                yield ("error", "Invalid API key. Please check your Anthropic API key and try again.")
+                return
+            except anthropic.RateLimitError:
+                if attempt >= max_retries:
+                    yield ("error", "Rate limit reached after {} retries. Please try again in a few minutes.".format(max_retries))
+                    return
+                yield ("status", "Rate limit hit — pausing {}s before retry {}/{} (progress is saved)...".format(
+                    retry_wait, attempt + 1, max_retries))
+                # Sleep in 5-second chunks so the UI can show a countdown
+                for remaining in range(retry_wait, 0, -5):
+                    time.sleep(5)
+                    yield ("status", "Retrying in {}s...".format(max(0, remaining - 5)))
+            except Exception as e:
+                yield ("error", "API call failed: {}".format(str(e)))
+                return
+        if response is None:
+            yield ("error", "Failed to get a response from the API.")
             return
 
         if response.stop_reason == "tool_use":
