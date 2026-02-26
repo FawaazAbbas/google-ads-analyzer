@@ -1,0 +1,18 @@
+# Environment
+.env
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+
+# Google Ads data (user uploads — never commit real account data)
+data/*.csv
+
+# Generated reports
+output/
+
+# Python
+*.egg-info/
+dist/
+build/

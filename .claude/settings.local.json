@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c \"import anthropic, pandas, rich, dotenv; print\\(''All dependencies already installed''\\)\")",
+      "Bash(python3 -c \"import anthropic; import pandas; import rich; import dotenv; print\\(f''anthropic {anthropic.__version__}, pandas {pandas.__version__}, rich OK, dotenv OK''\\)\")",
+      "Bash(python3 -c \"import anthropic; import pandas; import rich; import dotenv; print\\(''anthropic:'', anthropic.__version__, ''| pandas:'', pandas.__version__\\)\")",
+      "Bash(python3 -m venv --help)",
+      "Bash(\"/Users/fawaazabbas/Library/Mobile Documents/com~apple~CloudDocs/Fawaaz''s Macbook/Agents/venv/bin/pip\" install \"anthropic>=0.23.0\" \"pandas>=1.5.0,<2.0.0\" \"rich>=12.0.0\" \"python-dotenv>=0.19.0\" --only-binary=:all: -q)",
+      "Bash(\"/Users/fawaazabbas/Library/Mobile Documents/com~apple~CloudDocs/Fawaaz''s Macbook/Agents/venv/bin/python\" -c \"import anthropic; import pandas; import rich; import dotenv; print\\(''anthropic:'', anthropic.__version__, ''| pandas:'', pandas.__version__\\)\")",
+      "Bash(python3 -c \"import sys; print\\(sys.version_info\\)\")",
+      "Bash(\"/Users/fawaazabbas/Library/Mobile Documents/com~apple~CloudDocs/Fawaaz''s Macbook/Agents/venv/bin/python\" -c \"import streamlit; print\\(''streamlit'', streamlit.__version__\\)\")"
+    ]
+  }
+}
